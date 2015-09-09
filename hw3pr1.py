@@ -99,106 +99,193 @@ def replace_some(L, chance_of_replacing):
 
     return [randomize(e, chance_of_replacing) for e in L]
 
-#
+
+################################################################################
 # below are functions that relate to sound-processing ...
 #
-
-
-# a function to make sure everything is working
-def test():
-    """ a test function that plays swfaith.wav
-        You'll need swfailt.wav in this folder.
-    """
-    play( 'swfaith.wav' )
-
+# I've re-organized the code so that we can compose the sound-processing 
+# operations. Each operation has a modOp function, which takes a tuple that
+# contains samples & sampling rate. The function performs the operation, and 
+# returns the new samples and sampling rate. A separate function wraps each 
+# modOp. This function takes a filename and additional arguments, opens the 
+# file, reads the data, calls the corresponding modOp function, writes the 
+# results to an output file, and plays the result.
+################################################################################
     
-# The example changeSpeed function
+# helper functions
+
+def playNewSound( (data, rate), outputFilename='out.wav'):
+    '''Given a (sample, sampling rate) tuple and the name of an output file, 
+       the function will write the sound data to the output file and play it.
+    '''
+
+    print "Playing new sound..."
+    writewav(data, rate, outputFilename)
+    play(outputFilename)
+
+
+def combineFiles(filenames, combinator, outputFilename="out.wav"):
+    '''Given a list of sound files, combines the sounds in those files,
+       according to the supplied function, and plays the result.
+
+       The function expects one argument: a list of sound data tuples.
+    '''
+    
+    print "Reading in the sound data..."
+    data = map(readwav, filenames)
+    
+    print "Computing new sound..."
+    newSound = combinator(data)
+    
+    playNewSound(newSound, outputFilename)
+
+
+def modifyFile(inputFilename, function, outputFilename="out.wav"):
+    '''Modifies the sounds in a file, according to the supplied function, and
+       plays the result.
+
+       The function expects one argument: a tuple of sound data.
+    '''
+
+    # modifying one file is a specific case of a more general version:
+    # combining a modification of multiple files
+    combineFiles([inputFilename], lambda l: function(l[0]), outputFilename)
+
+
+# changing a sound's speed 
+
+def modChangeSpeed( (samples, rate), newRate ):
+    '''changes a sound's sampling rate'''
+
+    return (samples, newRate)
+
+
 def changeSpeed(filename, newsr):
-    """ changeSpeed allows the user to change an audio file's speed
-        input: filename, the name of the original file
-               newsr, the *new* sampling rate in samples per second
-        output: no return value; creates and plays the file 'out.wav'
-    """
-    samps, sr = readwav(filename)
+    '''plays an audio file at a different speed'''
+    
+    modifyFile(filename, lambda sound: modChangeSpeed(sound, newsr))
+    
 
-    print "The first 10 sound-pressure samples are\n", samps[:10]
-    print "The original number of samples per second is", sr
-    
-    newsamps = samps                        # no change to the sound
-    writewav( newsamps, newsr, "out.wav" )  # write data to out.wav
-    print "\nPlaying new sound..."
-    play( 'out.wav' )   # play the new file, 'out.wav'
-    
+# flip-flopping a sound
+
+def modFlipFlop( (samples, rate) ):
+    '''swaps the halves of a sound'''
+
+    midpoint = len(samples) / 2
+    newSamples = samples[midpoint:] + samples[:midpoint]
+    return (newSamples, rate)
 
 
 def flipflop(filename):
-    """ flipflop swaps the halves of an audio file
-        input: filename, the name of the original file
-        output: no return value, but
-                this creates the sound file 'out.wav'
-                and plays it
-    """
-    print "Playing the original sound..."
-    play(filename)
+    '''swaps the halves of an audio file and plays the new sound'''
     
-    print "Reading in the sound data..."
-    samps, sr = readwav(filename)
+    modifyFile(filename, modFlipFlop)
+
+
+# reversing a sound
+
+def modReverse( (samples, rate) ):
+    '''reverses a sound'''
+
+    return (samples[::-1], rate)
+
+
+def reverse(filename):
+    '''plays an audio file backwards'''
     
-    print "Computing new sound..."
-    # this gets the midpoint and calls it x
-    x = len(samps)/2
-    newsamps = samps[x:] + samps[:x] # flip flop
-    newsr = sr                       # no change to the sr
+    modifyFile(filename, modReverse)
+
+
+# changing the volume
+
+def modVolume( (samples, rate), scale_factor ):
+    '''scales a sound's volume by scale_factor'''
+
+    return scale(samples, scale_factor), rate
+
+
+def volume(filename, scale_factor):
+    '''plays an audio file, with the original volume scaled by scale_factor'''
+
+    modifyFile(filename, lambda sound: modVolume(sound, scale_factor))
+
+
+# adding static
+
+def modStatic( (samples, rate), probability_of_static ):
+    '''replaces each sample with static, according to the given probability'''
+
+    return replace_some(samples, probability_of_static), rate
+
+
+def static(filename, probability_of_static):
+    '''plays an audio file an replaces each sample with static, according to
+       the given probability'''
+       
+    modifyFile(filename, lambda sound: modStatic(sound, probability_of_static))
+
+
+# overlaying multiple sounds
+
+def overlayN(sounds):
+    '''given a list of sounds, overlay them into a single sound'''
     
-    writewav( newsamps, newsr, "out.wav" )
-    print "Playing new sound..."
-    play( 'out.wav' )
+    # IMPORTANT!
+    # we want each sound to make a 1 / N contribution to the final sound, 
+    # where N is the number of sounds
+    scaleBack = 1.0 / len(sounds) 
+    
+    # separate the samples from the rates
+    samples, rates = apply(zip, sounds)
+    
+    # scale and sum the sounds
+    scaleFactors = [scaleBack] * len(samples)
+    newSound = add_scale_N(samples, scaleFactors)
+    
+    # use the first stream's sample rate as the sample rate for the new sounds
+    newRate = rates[0]
+
+    return (newSound, newRate)
 
 
+def overlay(filename1, filename2):
+    '''overlays the sounds from two files and plays them'''
+
+    sounds = [readwav(filename1), readwav(filename2)]
+    newSound = overlayN(sounds)
+    playNewSound(newSound)
 
 
-# Sound function to write #1:  reverse
+# echo
+
+def modEcho( (samples, rate), time_delay ):
+    '''adds an echo effect to a sound.
+    
+       The time_delay parameter determines the echo's latency.
+    '''
+
+    # Echo works by overlaying the sound with a copy of itself.
+    # The copy is padded by silence whose duration is determined by time_delay.
+
+    numSilentSamples = int(rate * time_delay)   # how long is the silence?
+    silentSamples = [0] * numSilentSamples      # make the silence
+    paddedSamples = silentSamples + samples     # pad the sound with silence
+
+    # prepare to overlay
+    sound = (samples, rate)    
+    echoedSound = (paddedSamples, rate)
+    
+    return overlayN([sound, echoedSound])
 
 
+def echo(filename, time_delay):
+    '''adds an echo effect to a sound and plays it'''
+    
+    modifyFile(filename, lambda d: modEcho(d, time_delay))
 
 
+# tones
 
-
-
-# Sound function to write #2:  volume
-
-
-
-
-
-
-
-# Sound function to write #3:  static
-
-
-
-
-
-
-
-# Sound function to write #4:  overlay
-
-
-
-
-
-
-
-# Sound function to write #5:  echo
-
-
-
-
-
-
-
-
-# Helper function for generating pure tones
 def gen_pure_tone(freq, seconds):
     """ pure_tone returns the y-values of a cosine wave
         whose frequency is freq Hertz.
@@ -221,22 +308,80 @@ def gen_pure_tone(freq, seconds):
 
 def pure_tone(freq, time_in_seconds):
     """ plays a pure tone of frequence freq for time_in_seconds seconds """
+
     print "Generating tone..."
-    samps, sr = gen_pure_tone(freq, time_in_seconds)
-    print "Writing out the sound data..."
-    writewav( samps, sr, "out.wav" )
-    print "Playing new sound..."
-    play( 'out.wav' )
+    tone = gen_pure_tone(freq, time_in_seconds)
+    playNewSound(tone)
 
 
+# chords
+
+def chord(f1, f2, f3, time_in_seconds):
+    '''plays a chord composed of three frequencies, for a given duration'''
+    
+    print "Generating tones..."
+    tones = [gen_pure_tone(freq, time_in_seconds) for freq in (f1, f2, f3)]
+    
+    print "Generating chord..."
+    sound = overlayN(tones) 
+    
+    playNewSound(sound)
 
 
-# Sound function to write #6:  chord
+# BONUS: melodies!
+
+def makeMelody(notes):
+    '''given a list of notes, returns a melody of those notes
+       
+       Each note is represented as a string (see the body of this function).
+    '''
+    
+    # a dictionary that maps note names to frequencies
+    # http://en.wikipedia.org/wiki/Piano_key_frequencies
+    TONES = {'A'  : 440.000,
+             'A#' : 466.164,
+             'B'  : 493.883,
+             'C'  : 523.251,
+             'C#' : 554.365,
+             'D'  : 587.330,
+             'D#' : 622.254,
+             'E'  : 659.255,
+             'F'  : 698.456,
+             'F#' : 739.989,
+             'G'  : 783.991,
+             'G#' : 783.991 }
+    TONES['A♭'] = TONES['G#']
+    TONES['B♭'] = TONES['A#']
+    TONES['D♭'] = TONES['C#']
+    TONES['E♭'] = TONES['D#']
+    TONES['G♭'] = TONES['F#']
+
+    # seconds per note
+    DURATION = .5   
+    
+    # generate the tones
+    tones = [gen_pure_tone(TONES[n], DURATION) for n in notes]
+
+    # separate the samples from the rates
+    samples, rates = apply(zip, tones)
+    
+    # flatten the list of samples into a single list
+    melody = reduce(list.__add__, samples)
+    
+    # use the rate of the first sample as the rate of the melody
+    rate = rates[0]
+    
+    return (melody, rate)
 
 
-
-
-
-
-
-
+def twinkle():
+    '''Plays a simple version of "Twinkle, twinkle little star"'''
+    
+    part1 = [ 'A',  'A',  'E',  'E',  'F#', 'F#', 'E',
+              'D',  'D',  'C#', 'C#', 'B',   'B', 'A'  ] 
+    part2 = [ 'E',  'E',  'D',  'D',  'C#', 'C#', 'B'  ]
+    
+    song = part1 + part2 + part2 + part1
+    
+    playNewSound(makeMelody(song))
+    
